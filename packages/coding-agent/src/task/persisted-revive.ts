@@ -29,10 +29,16 @@ import {
 	createSubagentSettings,
 	followMCPTools,
 	replayRevivedAgentStart,
+	resolveSoftRequestBudget,
 	subagentRetryFallbackRole,
 } from "./executor";
 import { isCompletionProbeEnabled } from "./completion-probe";
-import { cfgTaskAgentAccountPools } from "./settings";
+import {
+	cfgTaskAgentAccountPools,
+	cfgTaskAgentSoftRequestBudget,
+	cfgTaskSoftRequestBudget,
+	cfgTaskSoftRequestBudgetNotice,
+} from "./settings";
 import { type RestoredSeanceSession, restoreSeanceSession } from "./seance";
 import { seanceIsolationOptions } from "./seance-policy";
 import type { AgentDefinition } from "./types";
@@ -333,6 +339,12 @@ export function createPersistedSubagentReviverFactory(
 				id: ref.id,
 				agent: persistedAgentDefinition(ref.displayName, init),
 				completionProbe: isCompletionProbeEnabled(ctx.settings, taskDepth - 1),
+				softRequestBudget: resolveSoftRequestBudget(
+					ref.displayName,
+					Math.max(0, Math.trunc(Number(cfgTaskSoftRequestBudget.get(ctx.settings)) || 0)),
+					cfgTaskAgentSoftRequestBudget.get(ctx.settings),
+				),
+				softRequestBudgetNotice: cfgTaskSoftRequestBudgetNotice.get(ctx.settings),
 				eventBus: ctx.eventBus,
 				subagentEventBus: ctx.subagentEventBus,
 				sessionFile,

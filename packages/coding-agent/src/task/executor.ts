@@ -3045,6 +3045,8 @@ export interface IrcWakeTurnMonitorOptions {
 	 * (see {@link isCompletionProbeEnabled}); a peer-woken turn never does.
 	 */
 	completionProbe?: boolean;
+	softRequestBudget?: number;
+	softRequestBudgetNotice?: boolean;
 	/** `false` = the session has no `yield` tool; see {@link ExecutorOptions.structured}. */
 	structured?: boolean;
 	outputSchema?: unknown;
@@ -3237,6 +3239,8 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 	const { id, agent } = options;
 	const index = options.index ?? 0;
 	const maxRuntimeMs = options.maxRuntimeMs ?? 0;
+	const softRequestBudget = options.softRequestBudget ?? 0;
+	const softRequestBudgetNotice = options.softRequestBudgetNotice ?? softRequestBudget > 0;
 	session.setIrcWakeTurnObserver(records => {
 		// Autonomous IRC wake turns reuse the session's YieldTool just like
 		// runSubagentFollowUpTurn; clear the prior run's incremental-section flag
@@ -3326,8 +3330,8 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 			parentToolCallId: options.parentToolCallId,
 			detached: true,
 			sessionFile,
-			softRequestBudget: 0,
-			softRequestBudgetNotice: false,
+			softRequestBudget,
+			softRequestBudgetNotice,
 			maxRuntimeMs,
 			// A peer's message gets a short answer, too short to probe; the owner's message is an
 			// assignment the owner waits on.
@@ -3375,7 +3379,9 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 			const lastAssistant = session.getLastAssistantMessage();
 			const yielded = turnMonitor.yieldCalled();
 			const runtimeLimitExceeded = turnMonitor.runtimeLimitExceeded();
-			const aborted = runtimeLimitExceeded || (lastAssistant?.stopReason === "aborted" && !yielded);
+			const budgetExceeded = turnMonitor.abortKind() === "budget";
+			const aborted =
+				runtimeLimitExceeded || budgetExceeded || (lastAssistant?.stopReason === "aborted" && !yielded);
 			// Two error lanes. `error` carries full diagnostics (a thrown turn
 			// error's stack) for `done.error`, logs, and lifecycle. `errorForPeer`
 			// carries only the short, attributed message: a stack trace injected
@@ -3700,6 +3706,8 @@ export interface FollowUpTurnOptions {
 	maxRuntimeMs?: number;
 	/** Periodically ask for a completion estimate during this turn; see {@link isCompletionProbeEnabled}. */
 	completionProbe?: boolean;
+	softRequestBudget?: number;
+	softRequestBudgetNotice?: boolean;
 	/** Workpool items accepted by the child yield tool during this turn. */
 	workPoolYieldItems?: WorkPoolYieldItem[];
 }
@@ -3769,6 +3777,8 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 	resetYieldTurnState(session.getToolByName("yield"));
 	const ref = AgentRegistry.global().get(id);
 	const sessionFile = ref?.sessionFile ?? undefined;
+	const softRequestBudget = options.softRequestBudget ?? 0;
+	const softRequestBudgetNotice = options.softRequestBudgetNotice ?? softRequestBudget > 0;
 
 	const monitor = createSubagentRunMonitor({
 		index,
@@ -3784,8 +3794,8 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		parentToolCallId: options.parentToolCallId,
 		detached: true,
 		sessionFile,
-		softRequestBudget: 0,
-		softRequestBudgetNotice: false,
+		softRequestBudget,
+		softRequestBudgetNotice,
 		maxRuntimeMs: options.maxRuntimeMs ?? 0,
 		completionProbe: options.completionProbe ?? false,
 	});
@@ -4441,6 +4451,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		parentToolCallId: options.parentToolCallId,
 		sessionFile: subtaskSessionFile,
 		maxRuntimeMs,
+		softRequestBudget,
+		softRequestBudgetNotice,
 		structured,
 		outputSchema,
 		outputSchemaMode: options.outputSchemaMode,
