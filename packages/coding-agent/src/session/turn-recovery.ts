@@ -120,7 +120,7 @@ const HTTP2_STREAM_RESET_ERROR_RE =
 // Same transport-failure class as the stall/reset entries: retriable, and
 // eligible for preserved-turn continuation on resolved tool turns.
 const PREMATURE_STREAM_CLOSE_ERROR_RE =
-	/(?:stream closed before a (?:finish_reason|terminal response event)|Codex stream ended before terminal completion event|Cursor stream ended before turnEnded)/i;
+	/(?:stream closed before a (?:finish_reason|terminal response event)|stream ended without a finish reason|Codex stream ended before terminal completion event|Cursor stream ended before turnEnded)/i;
 
 /**
  * Bare abort sentinels with no provider reason: our own `"Request was aborted"`
@@ -727,6 +727,7 @@ export class TurnRecovery {
 	 * own `response.steer`, and the rejected steer drains as ordinary input next.
 	 */
 	handleCommittedTextStreamStall(message: AssistantMessage): boolean {
+		if (this.#isAbortedTextStub(message)) return false;
 		const id = this.#classifyRetryMessage(message);
 		const socketClosed =
 			message.stopReason === "error" &&
@@ -1738,6 +1739,7 @@ export class TurnRecovery {
 	 * so replaying the turn can duplicate user-visible output or work.
 	 */
 	#hasReplayUnsafeOutput(message: AssistantMessage): boolean {
+		if (this.#isAbortedTextStub(message)) return false;
 		return message.content.some(
 			block =>
 				block.type === "toolCall" ||
@@ -1745,6 +1747,40 @@ export class TurnRecovery {
 				block.type === "anthropicServerTool" ||
 				(block.type === "text" && this.#host.textOutputCommitted() && block.text.trim().length > 0),
 		);
+	}
+
+	/**
+	 * An aborted, zero-usage assistant stub carrying only a tiny unsigned text
+	 * fragment (such as Vertex AI closing mid-stream after emitting `" Cui"`).
+	 * Unlike genuine partial answers, replaying or continuing from such a stub
+	 * poisons in-context history and reasoning; it is cleanly discarded and
+	 * retried from scratch.
+	 */
+	#isAbortedTextStub(message: AssistantMessage): boolean {
+		if (message.stopReason !== "error" && message.stopReason !== "aborted") return false;
+		if ((message.usage?.totalTokens ?? 0) > 0) return false;
+		const errorMessage = message.errorMessage ?? "";
+		if (
+			!PREMATURE_STREAM_CLOSE_ERROR_RE.test(errorMessage) &&
+			message.provider !== "google-vertex" &&
+			message.provider !== "google-generative-ai"
+		) {
+			return false;
+		}
+		let totalTextLen = 0;
+		for (const block of message.content) {
+			if (block.type === "toolCall" || block.type === "image" || block.type === "anthropicServerTool") {
+				return false;
+			}
+			if (block.type === "thinking" && (block.thinking.trim().length > 0 || Boolean(block.thinkingSignature))) {
+				return false;
+			}
+			if (block.type === "text") {
+				if ("textSignature" in block && Boolean(block.textSignature)) return false;
+				totalTextLen += block.text.trim().length;
+			}
+		}
+		return totalTextLen > 0 && totalTextLen <= 8;
 	}
 
 	/**
