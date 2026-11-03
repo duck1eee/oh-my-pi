@@ -973,6 +973,7 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 		const responsesClose = "OpenAI responses stream closed before a terminal response event was received";
 		const codexClose = "Codex stream ended before terminal completion event";
 		const cursorClose = "Cursor stream ended before turnEnded";
+		const googleClose = "Google API stream ended without a finish reason (connection dropped or response truncated)";
 
 		function gatewayMessage(content: AssistantMessage["content"], errorMessage: string): AssistantMessage {
 			const message = makeMessage(content, model);
@@ -993,6 +994,7 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 			["responses", responsesClose],
 			["Codex responses", codexClose],
 			["Cursor", cursorClose],
+			["Google", googleClose],
 		])("continues a premature %s close after a resolved tool call", (_provider, errorMessage) => {
 			const message = gatewayMessage(
 				[{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "pwd" } }],
@@ -1257,6 +1259,7 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 				// `error` frame for the missing terminal event; the provider reports it
 				// as the same envelope truncation a dropped connection produces.
 				"Anthropic stream envelope error: error frame received before message_stop (type=server_error code=upstream_stream_truncated): [upstream stream truncated (no completion event; 0 text chars)]",
+				"Google API stream ended without a finish reason (connection dropped or response truncated)",
 			]) {
 				const message = stalledTextTurn(undefined, errorMessage);
 				const { host, continues } = continuationHost(message);
@@ -1281,6 +1284,19 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 			const { host, continues } = continuationHost(message);
 			expect(new TurnRecovery(host).handleCommittedTextStreamStall(message)).toBe(true);
 			expect(continues).toEqual(["stream-stall-continue"]);
+		});
+
+		it("retries from scratch instead of continuing when an aborted stream leaves a tiny zero-usage stub", () => {
+			const message = stalledTextTurn(
+				[{ type: "text", text: " Cui" }],
+				"Google API stream ended without a finish reason (connection dropped or response truncated)",
+			);
+			const { host, continues } = continuationHost(message);
+			const recovery = new TurnRecovery(host);
+
+			expect(recovery.isRetryableError(message)).toBe(true);
+			expect(recovery.handleCommittedTextStreamStall(message)).toBe(false);
+			expect(continues).toEqual([]);
 		});
 
 		it("stops continuing past the per-prompt cap and resets on a new prompt", () => {

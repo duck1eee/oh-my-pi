@@ -478,13 +478,41 @@ function sanitizeMalformedToolCalls(messages: Message[], model: Model): Message[
 	return result;
 }
 
+function isAbortedTextStub(msg: AssistantMessage): boolean {
+	if (msg.stopReason !== "error" && msg.stopReason !== "aborted") return false;
+	if ((msg.usage?.totalTokens ?? 0) > 0) return false;
+	let textLen = 0;
+	for (const block of msg.content) {
+		if (block.type === "toolCall" || block.type === "image" || block.type === "anthropicServerTool") return false;
+		if (block.type === "thinking" && (block.thinking.trim().length > 0 || Boolean(block.thinkingSignature))) {
+			return false;
+		}
+		if (block.type === "text") {
+			if ("textSignature" in block && Boolean(block.textSignature)) return false;
+			textLen += block.text.trim().length;
+		}
+	}
+	if (textLen === 0 || textLen > 8) return false;
+	const errorMessage = msg.errorMessage ?? "";
+	return (
+		/stream ended without a finish reason/i.test(errorMessage) ||
+		msg.provider === "google-vertex" ||
+		msg.provider === "google-generative-ai"
+	);
+}
+
 /**
  * Whether {@link transformMessages} drops `msg` from every replay: a turn cut
- * off by `length` / `error` / `aborted` that carries no text and no tool call.
+ * off by `length` / `error` / `aborted` that carries no actionable output (no text
+ * and no tool call, or a zero-usage aborted text stub like `" Cui"`).
  */
 export function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage): boolean {
 	const isTruncatedStop = msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted";
-	return isTruncatedStop && !msg.content.some(block => block.type === "toolCall" || block.type === "text");
+	if (!isTruncatedStop) return false;
+	if (!msg.content.some(block => block.type === "toolCall" || block.type === "text")) {
+		return true;
+	}
+	return isAbortedTextStub(msg);
 }
 
 /**
@@ -496,6 +524,7 @@ export function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage):
  * to apply its tool-name limits; without one, any provider-declarable name survives.
  */
 export function isSurvivingAssistant(msg: AssistantMessage, model?: Model): boolean {
+	if (shouldDropTruncatedThinkingOnlyAssistant(msg)) return false;
 	const isTruncatedStop = msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted";
 	if (msg.content.length === 0) return !isTruncatedStop;
 	const { allowedName, maxLength } = toolCallNameLimits(model);

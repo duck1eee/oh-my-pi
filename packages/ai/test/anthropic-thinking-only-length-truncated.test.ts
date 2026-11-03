@@ -187,4 +187,30 @@ describe("transformMessages drops thinking-only assistant turns", () => {
 		);
 		expect(kept).toBeDefined();
 	});
+
+	it("drops an aborted zero-usage text stub that ended prematurely without finish reason", () => {
+		const user: UserMessage = { role: "user", content: "answer me", timestamp: 1 };
+		const abortedStub: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: " Cui" }],
+			api: "google-vertex",
+			provider: "google-vertex",
+			model: "gemini-4-argon",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "error",
+			errorMessage: "Google API stream ended without a finish reason (connection dropped or response truncated)",
+			timestamp: 2,
+		};
+		const nextUser: UserMessage = { role: "user", content: "next prompt", timestamp: 3 };
+		const transformed = transformMessages([user, abortedStub, nextUser], model);
+		const surviving = transformed.filter(m => m.role === "assistant");
+		expect(surviving).toHaveLength(0);
+	});
 });
